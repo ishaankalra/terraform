@@ -14,6 +14,7 @@ import (
 	"github.com/hashicorp/terraform/internal/addrs"
 	"github.com/hashicorp/terraform/internal/collections"
 	"github.com/hashicorp/terraform/internal/instances"
+	"github.com/hashicorp/terraform/internal/lang/marks"
 	"github.com/hashicorp/terraform/internal/promising"
 	"github.com/hashicorp/terraform/internal/stacks/stackaddrs"
 	"github.com/hashicorp/terraform/internal/stacks/stackplan"
@@ -113,7 +114,8 @@ func (c *StackCallInstance) InputVariableValues(ctx context.Context, phase EvalP
 // attributes of the result for their appearance in downstream expressions.
 func (c *StackCallInstance) CheckInputVariableValues(ctx context.Context, phase EvalPhase) (cty.Value, tfdiags.Diagnostics) {
 	var diags tfdiags.Diagnostics
-	wantTy, defs := c.CalledStack(ctx).InputsType(ctx)
+	calledStack := c.CalledStack(ctx)
+	wantTy, defs := calledStack.InputsType(ctx)
 	decl := c.call.Declaration(ctx)
 
 	v := cty.EmptyObjectVal
@@ -156,6 +158,38 @@ func (c *StackCallInstance) CheckInputVariableValues(ctx context.Context, phase 
 			})
 		}
 		return cty.DynamicVal, diags
+	}
+
+	if v.IsKnown() && !v.IsNull() {
+		var markDiags tfdiags.Diagnostics
+		unmarkedV, _ := v.Unmark()
+		vars := calledStack.InputVariables(ctx)
+		for name, aV := range unmarkedV.AsValueMap() {
+			if aV.HasMark(marks.Ephemeral) {
+				varAddr := stackaddrs.InputVariable{Name: name}
+				variable := vars[varAddr]
+				varDecl := variable.Declaration(ctx)
+				if !varDecl.Ephemeral {
+					markDiags = markDiags.Append(&hcl.Diagnostic{
+						Severity:    hcl.DiagError,
+						Summary:     "Ephemeral value not allowed",
+						Detail:      fmt.Sprintf("The input variable %q does not accept ephemeral values.", name),
+						Subject:     rng.ToHCL().Ptr(),
+						Expression:  expr,
+						EvalContext: hclCtx,
+						// TODO: Set Extra to signal that this diagnostic is "caused by ephemeral"
+					})
+				}
+			}
+		}
+		diags = diags.Append(markDiags)
+		if markDiags.HasErrors() {
+			// If we have an ephemeral value in a place where there shouldn't
+			// be one then we'll return an unknown value to make sure that
+			// downstreams that aren't checking the errors can't leak the
+			// value into somewhere it ought not to be.
+			return cty.UnknownVal(v.Type()), diags
+		}
 	}
 
 	return v, diags

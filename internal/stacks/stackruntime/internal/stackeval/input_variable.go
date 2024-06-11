@@ -110,9 +110,12 @@ func (v *InputVariable) CheckValue(ctx context.Context, phase EvalPhase) (cty.Va
 		func(ctx context.Context) (cty.Value, tfdiags.Diagnostics) {
 			var diags tfdiags.Diagnostics
 
+			cfg := v.Config(ctx)
+			decl := v.Declaration(ctx)
+
 			switch {
 			case v.Addr().Stack.IsRoot():
-				wantTy := v.Declaration(ctx).Type.Constraint
+				wantTy := decl.Type.Constraint
 
 				extVal := v.main.RootVariableValue(ctx, v.Addr().Item, phase)
 
@@ -120,8 +123,6 @@ func (v *InputVariable) CheckValue(ctx context.Context, phase EvalPhase) (cty.Va
 				// and replace it with the variable's default value. This is
 				// consistent with how embedded stacks handle defaults.
 				if extVal.Value.IsNull() {
-					cfg := v.Config(ctx)
-
 					// A separate code path will validate the default value, so
 					// we don't need to do that here.
 					defVal := cfg.DefaultValue(ctx)
@@ -158,7 +159,7 @@ func (v *InputVariable) CheckValue(ctx context.Context, phase EvalPhase) (cty.Va
 
 				// TODO: check the value against any custom validation rules
 				// declared in the configuration.
-				return val, diags
+				return cfg.markValue(val), diags
 
 			default:
 				definedByCallInst := v.DefinedByStackCallInstance(ctx, phase)
@@ -177,7 +178,7 @@ func (v *InputVariable) CheckValue(ctx context.Context, phase EvalPhase) (cty.Va
 				// TODO: check the value against any custom validation rules
 				// declared in the configuration.
 
-				return val, diags
+				return cfg.markValue(val), diags
 			}
 		},
 	))
